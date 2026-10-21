@@ -1,0 +1,4 @@
+{"split": "test", "step": 0, "test/chrf++": 41.249035872407525}
+{"split": "eval", "step": 0, "eval/chrf++": 31.4217774957121}
+{"split": "eval", "step": 8, "eval/chrf++": 31.4217774957121}
+{"split": "test", "step": 8, "test/chrf++": 41.249035872407525}

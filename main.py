@@ -520,6 +520,66 @@ def train(config: DictConfig):
 
 
 
+class LoRALinear(torch.nn.Module):
+    def __init__(self, base_layer: torch.nn.Linear, r: int, alpha: float, dropout: float):
+        super().__init__()
+        if r < 1:
+            raise ValueError("LoRA rank must be a positive integer.")
+        if not 0.0 <= dropout < 1.0:
+            raise ValueError("LoRA dropout must be in the range [0, 1).")
+
+        self.base_layer = base_layer
+        self.base_layer.requires_grad_(False)
+        self.lora_A = torch.nn.Linear(
+            base_layer.in_features,
+            r,
+            bias=False,
+            device=base_layer.weight.device,
+            dtype=base_layer.weight.dtype,
+        )
+        self.lora_B = torch.nn.Linear(
+            r,
+            base_layer.out_features,
+            bias=False,
+            device=base_layer.weight.device,
+            dtype=base_layer.weight.dtype,
+        )
+        self.dropout = torch.nn.Dropout(dropout)
+        self.scaling = alpha / r
+        torch.nn.init.kaiming_uniform_(self.lora_A.weight, a=5**0.5)
+        torch.nn.init.zeros_(self.lora_B.weight)
+
+    def forward(self, inputs):
+        return self.base_layer(inputs) + self.lora_B(self.lora_A(self.dropout(inputs))) * self.scaling
+
+
+def apply_lora(
+    model: torch.nn.Module,
+    target_modules: tuple[str, ...],
+    r: int,
+    lora_alpha: float,
+    lora_dropout: float,
+) -> list[str]:
+    matches = [
+        (name, module)
+        for name, module in model.named_modules()
+        if name.rsplit(".", 1)[-1] in target_modules
+    ]
+    if not matches:
+        raise ValueError(f"No model modules matched LoRA targets: {target_modules}")
+
+    replaced_modules = []
+    for name, module in matches:
+        if not isinstance(module, torch.nn.Linear):
+            raise TypeError(f"LoRA target {name!r} must be a torch.nn.Linear, got {type(module).__name__}.")
+        parent_name, _, child_name = name.rpartition(".")
+        parent = model.get_submodule(parent_name) if parent_name else model
+        setattr(parent, child_name, LoRALinear(module, r, lora_alpha, lora_dropout))
+        replaced_modules.append(name)
+
+    return replaced_modules
+
+
 def get_model(config: DictConfig):
     model_cfg = config.task.model
     tokenizer = AutoTokenizer.from_pretrained(
