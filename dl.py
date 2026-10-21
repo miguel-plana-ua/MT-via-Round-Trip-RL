@@ -1,14 +1,13 @@
-import torch
-from torch.utils.data import DataLoader, Sampler
-from torchdata.datapipes.map import MapDataPipe
-from pytorch_lightning import LightningDataModule
 import warnings
+from types import SimpleNamespace
+
 from datasets import load_dataset
+from torch.utils.data import DataLoader, Dataset
 
 warnings.filterwarnings("ignore", ".*does not have many workers.*")
 
 
-class TranslationDataModule(LightningDataModule):
+class TranslationDataModule:
     def __init__(
         self,
         tokenizer,
@@ -20,9 +19,17 @@ class TranslationDataModule(LightningDataModule):
         sort_by_length: bool = True,
         sort_direction: str = "asc",
         train_batch_size: int = 1,
+        max_train_samples=None,
+        max_eval_samples=None,
     ):
-        super().__init__()
-        self.save_hyperparameters(ignore="tokenizer")
+        self.hparams = SimpleNamespace(
+            data_path=data_path,
+            dataset_config_name=dataset_config_name,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            max_train_samples=max_train_samples,
+            max_eval_samples=max_eval_samples,
+        )
         self.tokenizer = tokenizer
         self.train_data = None
         self.val_data = None
@@ -35,13 +42,16 @@ class TranslationDataModule(LightningDataModule):
             self.hparams.data_path, self.hparams.dataset_config_name, trust_remote_code=True
         )
 
-        def _resolve_split(split_names):
+        def _resolve_split(split_names, limit=None):
             for split_name in split_names:
                 if split_name in prompts:
-                    return prompts[split_name]
+                    split = prompts[split_name]
+                    if limit is not None:
+                        split = split.select(range(min(int(limit), len(split))))
+                    return split
             return None
 
-        train_split = _resolve_split(("train", "training"))
+        train_split = _resolve_split(("train", "training"), self.hparams.max_train_samples)
         if train_split is None:
             raise ValueError("Training split not found in dataset.")
         self.train_data = TranslationDataPipe(
@@ -51,7 +61,7 @@ class TranslationDataModule(LightningDataModule):
             tgt_col="sentence_" + self.hparams.target_lang,
         )
 
-        val_split = _resolve_split(("valid", "validation", "val"))
+        val_split = _resolve_split(("valid", "validation", "val"), self.hparams.max_eval_samples)
         if val_split is None:
             raise ValueError("Validation split not found in dataset.")
         self.val_data = TranslationDataPipe(
@@ -61,7 +71,7 @@ class TranslationDataModule(LightningDataModule):
             tgt_col="sentence_" + self.hparams.target_lang,
         )
 
-        test_split = _resolve_split(("test", "test_final"))
+        test_split = _resolve_split(("test", "test_final"), self.hparams.max_eval_samples)
         if test_split is not None:
             self.test_data = TranslationDataPipe(
                 test_split,
@@ -118,7 +128,7 @@ class TranslationDataModule(LightningDataModule):
         return batch_encoding, list(targets), list(sources), list(sample_ids)
 
 
-class TranslationDataPipe(MapDataPipe):
+class TranslationDataPipe(Dataset):
     def __init__(self, prompts, tokenizer, src_col, tgt_col) -> None:
         super().__init__()
         self.tokenizer = tokenizer
