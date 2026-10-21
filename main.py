@@ -1,6 +1,8 @@
 import os
 import copy
+import json
 import hydra
+from hydra.core.hydra_config import HydraConfig
 import torch
 from omegaconf import DictConfig, OmegaConf
 import wandb
@@ -105,6 +107,8 @@ def _run_evaluation(
         print(f"{split_name.capitalize()} evaluation results:")
         for key, value in results.items():
             print(f"  {key}: {value:.4f}")
+        with open(os.path.join(HydraConfig.get().runtime.output_dir, "metrics.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps({"split": split_name, "step": step_idx, **results}) + "\n")
 
     if wandb_run is not None and (results or sample_records):
         # log the sample records 5 times across training steps
@@ -195,7 +199,6 @@ def train(config: DictConfig):
         if reference_name is not None:
             ref_model = AutoModelForSeq2SeqLM.from_pretrained(
                 reference_name,
-                attn_implementation="flash_attention_2",
                 dtype=model.dtype,
             ).to(aux_device)
         else:
@@ -215,6 +218,8 @@ def train(config: DictConfig):
         target_lang=config.task.data.target_lang,
         sort_by_length=False,
         train_batch_size=int(getattr(config.task.training, "batch_size", 1)),
+        max_train_samples=getattr(config.task.data, "max_train_samples", None),
+        max_eval_samples=getattr(config.task.data, "max_eval_samples", None),
     )
     data.setup("fit")
     val_dataloader = data.val_dataloader() if run_eval else None
@@ -290,6 +295,7 @@ def train(config: DictConfig):
             wandb_table=wandb_table,
         )
 
+    step_idx = 0
     if run_training:
         for epoch in range(max_epochs):
             train_loader = data.train_dataloader()
@@ -470,11 +476,12 @@ def train(config: DictConfig):
                     #     wandb.log({"train/Translations": train_table}, step=step_idx)
                 step_idx += 1
             # Save the model every epoch
-            epoch_save_dir = os.path.join(os.getcwd(), "model", f"{model_name_for_run}_epoch_{epoch}_{target_lang_code}_chrf")
-            os.makedirs(epoch_save_dir, exist_ok=True)
-            model.save_pretrained(epoch_save_dir)
-            tokenizer.save_pretrained(epoch_save_dir)
-            print(f"Model saved to {epoch_save_dir}")
+            if bool(getattr(config.task.training, "save_model", True)):
+                epoch_save_dir = os.path.join(HydraConfig.get().runtime.output_dir, "model", f"{model_name_for_run}_epoch_{epoch}_{target_lang_code}_chrf")
+                os.makedirs(epoch_save_dir, exist_ok=True)
+                model.save_pretrained(epoch_save_dir)
+                tokenizer.save_pretrained(epoch_save_dir)
+                print(f"Model saved to {epoch_save_dir}")
     if run_eval and not eval_only:
         _run_evaluation(
             model,
