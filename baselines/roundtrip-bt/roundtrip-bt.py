@@ -616,6 +616,8 @@ if __name__ == "__main__":
                         help="Skip test evaluation after training")
     parser.add_argument("--regenerate_bt_every", type=int, default=1,
                         help="Regenerate backtranslations every N epochs")
+    parser.add_argument("--model_name", type=str, default="facebook/nllb-200-distilled-1.3B",
+                        help="HuggingFace NLLB checkpoint")
     args = parser.parse_args()
     
     # Load training data from breakend/nllb-multi-domain
@@ -661,7 +663,7 @@ if __name__ == "__main__":
     
     # Initialize trainer
     trainer = BacktranslationTrainer(
-        model_name="facebook/nllb-200-distilled-1.3B",
+        model_name=args.model_name,
         src_lang=args.src_lang_nllb,
         tgt_lang=args.tgt_lang_nllb,
     )

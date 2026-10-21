@@ -1167,6 +1167,8 @@ if __name__ == "__main__":
                         help="Skip validation during training")
     parser.add_argument("--skip_test", action="store_true",
                         help="Skip test evaluation after training")
+    parser.add_argument("--model_name", type=str, default="facebook/nllb-200-distilled-600M",
+                        help="HuggingFace NLLB checkpoint")
     args = parser.parse_args()
     
     # Load training data from breakend/nllb-multi-domain
@@ -1212,7 +1214,7 @@ if __name__ == "__main__":
     
     # Initialize trainer with auto-encoding, cross-domain, and adversarial components
     trainer = UMNMTTrainer(
-        model_name="facebook/nllb-200-distilled-600M",
+        model_name=args.model_name,
         src_lang=args.src_lang_nllb,
         tgt_lang=args.tgt_lang_nllb,
         noise_pwd=args.noise_pwd,

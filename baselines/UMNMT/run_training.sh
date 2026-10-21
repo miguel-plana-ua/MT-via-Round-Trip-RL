@@ -26,7 +26,7 @@ for LANG_PAIR in "${LANG_PAIRS[@]}"; do
         SRC_LANG="${LANG_PAIR%%-*}"
         TGT_LANG="${LANG_PAIR##*-}"
         
-        /workspace/miniconda3/envs/gfn/bin/python "${SCRIPT_DIR}/umnmt.py" \
+        python "${SCRIPT_DIR}/umnmt.py" \
             --dataset_config "${LANG_PAIR}" \
             --src_lang_nllb "${SRC_LANG}" \
             --tgt_lang_nllb "${TGT_LANG}"
