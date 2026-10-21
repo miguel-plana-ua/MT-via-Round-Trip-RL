@@ -5,12 +5,12 @@ data:
   source_lang: eng_Latn
   target_lang: rus_Cyrl
   dataset_config_name: "eng_Latn-rus_Cyrl"
+  max_train_samples: null # set small values (e.g. 8) for CPU smoke tests
+  max_eval_samples: null
 
 model:
-  name: "/workspace/thesis/src/model/facebook-nllb-200-distilled-600M_epoch_0_rus_Cyrl_chrf"
-  # name: "facebook/nllb-200-distilled-600M"
-  # name: /workspace/thesis/src/model/facebook-nllb-200-distilled-600M_epoch_2_wol_Latn
-  # name: "facebook/nllb-200-3.3B"
+  name: "facebook/nllb-200-distilled-600M"
+  # name: "facebook/nllb-200-distilled-1.3B"
   use_lora: false
   lora:
     r: 8
@@ -23,7 +23,7 @@ model:
 training:
   lr: 0.000002
   accumulate_grad_batches: 1
-  epochs: 1
+  epochs: 2 # paper: 2 epochs
   batch_size: 2
   num_return_sequences: 4
   updates_per_batch: 1
@@ -33,6 +33,7 @@ training:
   top_k: 100
   top_p: 0.95
   use_wandb: true
+  save_model: true
   log_every_n_steps: 5
   update_ref_policy_every_n_steps: 16
   
