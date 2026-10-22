@@ -87,3 +87,24 @@ paper; el "1600" del paper era aproximado. Por tanto, **los deltas Base→Ours m
 paper**. Solo `rus_Cyrl` se desvía algo (+0.42), sin explicación; ruso es el idioma donde el paper ya difiere del resto.
 Tiempo: los 6 jobs tardaron claramente menos de lo estimado (no hay `sacct`; no se midió con exactitud).
 Nota: los logs de Slurm se llaman `slurm/logs/mtrl-<etapa>-<jobid>.{out,err}`.
+
+## Etapa 3 `pilot` (22-oct, jobs 2410 y 2411): primer resultado de mejora
+
+`ayr_Latn`, NLLB-600M, 600 pasos (1200 frases), `--mem lowmem1` (embeddings congelados, chunk 1), semilla 27,
+test completo (1500 frases) antes/después, validación en 200 frases cada 100 pasos. ~36 min por job, 3.4 s/paso.
+
+| Run | Test antes | Test después | Δ | Val (200 frases) por paso | Recompensa de vuelta (primer→último 10 %) | KL (últ. 10 %) |
+|---|---|---|---|---|---|---|
+| lr 2e-6 (**paper**) | 24.38 | 25.90 | **+1.51** (bootstrap p ≤ 0.001) | 24.49 → 24.56 → 25.06 → 25.33 → 25.50 → 25.60 → 25.71 | 0.1595 → 0.1800 | 0.0001 |
+| lr 1e-5 (desviación, ×5) | 24.38 | 27.26 | **+2.87** (p ≤ 0.001) | 24.49 → 25.45 → 25.96 → 26.04 → 26.24 → 26.38 → 26.46 | 0.1661 → 0.2055 | 0.0009 |
+
+Referencia del paper (600M, aimara): 24.38 → 28.13 (**+3.75**) tras ~6000 pasos.
+
+* Pico de memoria con `lowmem1`: **política 7.58 GB, referencia 2.79 GB** (de 11.26 GB): holgura de ~3.7 GB.
+* Ambas curvas de validación suben de forma monótona; la recompensa de vuelta sube y el KL se mantiene en ≤ 1e-3.
+* Con el lr del paper y solo el 10 % de los pasos ya se recupera ~40 % de la ganancia final del paper (+1.51 de +3.75).
+* Intervalos de confianza del bootstrap ≈ ±0.5 chrF++; p = 0.001 es el mínimo posible con 1000 remuestreos.
+
+Cautelas: una sola semilla; sin control RT (MLE) todavía, así que no se separa "efecto RL" de "efecto de entrenar con
+round-trip"; el piloto usa embeddings congelados (desviación respecto al paper) y el de lr 1e-5 además un lr 5× mayor.
+Decisión: pasar a la etapa 4 (`full`, lr del paper, 2 épocas).
