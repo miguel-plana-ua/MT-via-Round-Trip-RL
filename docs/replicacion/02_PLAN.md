@@ -78,3 +78,43 @@ Base→Ours del *mismo* modelo medido por nosotros, no sobre el valor absoluto.
 ## Presupuesto de tiempo (fórmula, rellenar con el `s/paso` del smoke)
 `horas_entrenamiento ≈ pasos × s_por_paso / 3600`: piloto 600 pasos; completo 6000 pasos. Añade las evaluaciones:
 test completo (1500 frases, greedy, batch 48) antes y después, y validación periódica de 300 frases.
+
+## Siguientes pasos (ideas aparcadas, no implementadas)
+
+Decisión del 22-oct: los runs largos se hacen con `--mem lowmem1` (embeddings congelados), que es lo que está validado
+(piloto de aimara +1.51 con el lr del paper). Lo siguiente se retoma **solo si** el run completo de `ayr_Latn` queda
+claramente lejos del paper (600M: 24.38 → 28.13, +3.75) o si sobra tiempo.
+
+### A. Perfil `exact`: entrenar todo el modelo sin desviarse del paper (opción B)
+`lowmem1` solo se desvía del paper en que congela el embedding compartido / `lm_head` (262M de 615M parámetros). Para
+no congelar nada, la memoria fija de la política es 9.17 GiB (pesos 2.29 + gradientes 2.29 + AdamW 4.58) y las 2080 Ti
+tienen 11.0 GiB; el troceo actual (mínimo 1 grupo = 4 secuencias) deja ~1.35 GiB dinámicos y no cabe. Hace falta
+trocear **por secuencia**:
+* En `utils.py::grpo_compute_loss_and_logs`: nuevo parámetro `chunk_seqs`. Expandir las entradas del codificador con
+  `repeat_interleave(num_candidates)` y, para cada trozo de filas `r0:r1`, llamar a
+  `grpo_compute_decoder_per_token_logps` con esas filas (multiplicador 1). Las recompensas y ventajas ya se calculan
+  antes, por grupo, y la pérdida es suma de términos por secuencia / n_seqs, así que sigue siendo exacto.
+* En `main.py` y `configs/task/nllb_md.yaml`: leer `training.logp_chunk_seqs`. En `scripts/run_stage.py`: perfil
+  `exact` = `logp_chunk_seqs=1`, sin `freeze_embeddings`, AdamW normal.
+* Test: ampliar `tests/test_grpo_loss.py` (igualdad de pérdida, métricas y gradientes frente al modo normal).
+* Estimación (no medida): ~0.36 GiB dinámicos → ~9.5 GiB + ~0.4 de contexto CUDA ≈ 9.9 de 11.0 GiB; holgura ~1 GiB
+  (usar `expandable_segments`, ya activo en `slurm/job.sbatch`). Algo más lento por más trozos.
+* Comprobación: piloto de 600 pasos en `ayr_Latn`, semilla 27, lr 2e-6, comparable con el piloto `lowmem1`
+  (test 24.38 → 25.90, +1.51; val 24.49 → 25.71). Si cabe y da algo parecido, congelar los embeddings es irrelevante;
+  si da bastante más, los runs largos deben ir con `exact`; si da OOM, nos quedamos con `lowmem1` declarándolo como desviación.
+
+### B. Perfil con AdamW de 8 bits sin congelar (opción C)
+Todo entrenable con `optimizer=adamw8bit` (`bitsandbytes`) y troceo de 1 grupo: estado del optimizador ≈ 1.15 GiB en
+lugar de 4.58, pico estimado ≈ 7.5 GiB. Desviación: los estados de Adam van cuantizados. Requiere `pip install
+bitsandbytes` en el entorno `mtrl` y no está probado.
+
+### C. Otras líneas
+* Control **RT** (round-trip con entropía cruzada) en el mismo idioma: sin él no se separa el efecto del RL del de
+  entrenar con round-trip. Los scripts de `baselines/` entrenan todo con AdamW fp32 y no caben en 11 GiB: habría que
+  añadirles congelado de embeddings / optimizador de 8 bits y quitar las rutas del autor (`/workspace/miniconda3/...`).
+* Más semillas por idioma (el paper no reporta semillas) y más idiomas (`wol_Latn`, `dyu_Latn`, luego `rus_Cyrl`,
+  `fur_Latn`, `bho_Deva`).
+* 1.3B: pesos 5.5 GB en fp32; hace falta lo anterior más más ahorro de memoria, o GPUs de ≥24 GB.
+* Una tercera GPU **no** ayuda con el código actual: la política vive entera en `cuda:1` y la referencia en `cuda:0`.
+  Repartir la política exigiría FSDP / DeepSpeed ZeRO.
+

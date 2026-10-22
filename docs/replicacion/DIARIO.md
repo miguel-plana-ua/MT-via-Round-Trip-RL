@@ -108,3 +108,11 @@ Referencia del paper (600M, aimara): 24.38 → 28.13 (**+3.75**) tras ~6000 paso
 Cautelas: una sola semilla; sin control RT (MLE) todavía, así que no se separa "efecto RL" de "efecto de entrenar con
 round-trip"; el piloto usa embeddings congelados (desviación respecto al paper) y el de lr 1e-5 además un lr 5× mayor.
 Decisión: pasar a la etapa 4 (`full`, lr del paper, 2 épocas).
+
+## Decisiones del 22-oct (tarde)
+
+* Pilotos de `dyu_Latn` y `wol_Latn` (lr 2e-6, `lowmem1`) en cola; resultados pendientes de pegar aquí.
+* Los runs completos de la noche irán con `--mem lowmem1`. El perfil `exact` (entrenar todo sin congelar embeddings,
+  troceo por secuencia) queda aparcado en `02_PLAN.md`, sección "Siguientes pasos", para retomarlo si el run completo
+  de aimara queda lejos del paper.
+* Una tercera GPU no sirve con el código actual (política en una sola GPU); detalle en `02_PLAN.md` y `04_CAMBIOS.md`.

@@ -37,8 +37,11 @@ el cómputo es **opt-in** y se activa solo con los perfiles `--mem lowmem|tight`
 Perfiles de `run_stage.py`: `paper` = nada de lo anterior; `lowmem` = `freeze_embeddings` + chunk de 2 prompts;
 `lowmem1` = igual con chunk de 1 (≈0.8 GB menos de pico, algo más lento); `tight` = `freeze_embeddings` + chunk de 1 + `adamw8bit`.
 
-Estimación (mía, a verificar con el pico de memoria del smoke) de la GPU de la política: `paper` ≈ 14–16 GB,
-`lowmem` ≈ 8–9 GB, `tight` ≈ 5–6 GB; la GPU de la referencia necesita ≈ 2.5 GB + logits.
+Memoria de la GPU de la política (GiB; 11 GiB disponibles en las 2080 Ti de `abaco`). **Medido:** `lowmem` (chunk 2) 8.9;
+`lowmem1` (chunk 1) 7.58; la GPU de la referencia 2.8–3.3. **Extrapolado, no medido:** `paper` sin trocear ≈ 20
+(9.2 fijos: pesos 2.3 + gradientes 2.3 + AdamW 4.6; + ~10.6 de logits para 32 secuencias, a ~0.33 por secuencia).
+La estimación anterior de este documento ("paper ≈ 14–16 GB") era incorrecta. Una tercera GPU no ayuda: `main.py` solo usa
+dos (política en `cuda:1`, referencia en `cuda:0`) y la política cabe en una sola tarjeta.
 
 ## 4.4 Ficheros nuevos
 
