@@ -68,3 +68,22 @@ Resultado del smoke (`--mem lowmem`, 20 pasos, copia local del dataset `data/nll
 
 Decisión: margen de memoria justo (~1.5 GB tras contexto CUDA y fragmentación) → perfil `lowmem1` (chunk 1) y
 `expandable_segments` en el job para los runs largos. Aún no se ha comprobado que el pico no crezca en runs largos.
+
+## Etapa 2 `base` (22-oct, jobs 2404–2409): el Base reproduce la Tabla 1 del paper
+
+Evaluación sin entrenar, test completo (1500 frases), greedy, `max_new_tokens=63`, NLLB-600M, 6 jobs serializados:
+
+| Idioma | Base (nuestro) | Base (paper) | Diferencia |
+|---|---|---|---|
+| `ayr_Latn` | 24.38 | 24.38 | 0.00 |
+| `dyu_Latn` | 18.03 | 18.03 | 0.00 |
+| `fur_Latn` | 45.75 | 45.75 | 0.00 |
+| `wol_Latn` | 20.74 | 20.73 | +0.01 |
+| `bho_Deva` | 43.08 | 43.07 | +0.01 |
+| `rus_Cyrl` | 49.22 | 48.80 | +0.42 |
+
+Conclusión: datos (test de 1500 frases), tokenización, decodificación (greedy) y métrica (chrF++) coinciden con los del
+paper; el "1600" del paper era aproximado. Por tanto, **los deltas Base→Ours medidos aquí son comparables con los del
+paper**. Solo `rus_Cyrl` se desvía algo (+0.42), sin explicación; ruso es el idioma donde el paper ya difiere del resto.
+Tiempo: los 6 jobs tardaron claramente menos de lo estimado (no hay `sacct`; no se midió con exactitud).
+Nota: los logs de Slurm se llaman `slurm/logs/mtrl-<etapa>-<jobid>.{out,err}`.
