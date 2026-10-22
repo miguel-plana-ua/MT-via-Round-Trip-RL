@@ -111,8 +111,28 @@ Decisión: pasar a la etapa 4 (`full`, lr del paper, 2 épocas).
 
 ## Decisiones del 22-oct (tarde)
 
-* Pilotos de `dyu_Latn` y `wol_Latn` (lr 2e-6, `lowmem1`) en cola; resultados pendientes de pegar aquí.
+* Pilotos de `dyu_Latn` y `wol_Latn` (lr 2e-6, `lowmem1`): resultados abajo.
 * Los runs completos de la noche irán con `--mem lowmem1`. El perfil `exact` (entrenar todo sin congelar embeddings,
   troceo por secuencia) queda aparcado en `02_PLAN.md`, sección "Siguientes pasos", para retomarlo si el run completo
   de aimara queda lejos del paper.
 * Una tercera GPU no sirve con el código actual (política en una sola GPU); detalle en `02_PLAN.md` y `04_CAMBIOS.md`.
+
+## Pilotos de `dyu_Latn` y `wol_Latn` (22-oct, lr 2e-6, `lowmem1`, 600 pasos, semilla 27)
+
+Mismas condiciones que el piloto de aimara: test completo (1500 frases) antes/después, validación en 200 frases cada 100 pasos,
+3.4 s/paso, pico de memoria 7.58 GiB (política) / 2.79 GiB (referencia), igual que con aimara pese a otro idioma.
+
+| Idioma | Test antes (= Base del paper) | Test después | Δ nuestro | Δ paper (final, ~6000 pasos) | Δ nuestro / Δ paper | Val (200 frases) por paso | Recompensa de vuelta (1.º→últ. 10 %) |
+|---|---|---|---|---|---|---|---|
+| `ayr_Latn` | 24.38 (24.38) | 25.90 | +1.51 | +3.75 | 40 % | 24.49 → 25.71 | 0.1595 → 0.1800 |
+| `dyu_Latn` | 18.03 (18.03) | 19.90 | **+1.87** | +4.47 | 42 % | 17.10 → 18.37 | 0.1557 → 0.1780 |
+| `wol_Latn` | 20.74 (20.73) | 21.91 | +1.17 | +3.23 | 36 % | 20.16 → 20.76 | 0.1634 → 0.1828 |
+
+* Los tres mejoran con bootstrap pareado significativo (p ≤ 0.001, intervalos ≈ ±0.4–0.5) y con la recompensa de vuelta y la
+  chrF de ida al alza; el KL se queda en ≤ 2e-4.
+* Con solo el 10 % de los pasos los tres recuperan una fracción parecida (36–42 %) de la ganancia final del paper. Es una
+  coincidencia llamativa pero no prueba que el resto de la curva sea lineal: puede saturar.
+* En `wol_Latn` la validación (200 frases) se aplana desde el paso 200 (20.69 → 20.76), aunque el test sube +1.17: puede ser
+  ruido del subconjunto de validación, pero es el idioma con menos señal; en `dyu_Latn` la validación sigue subiendo despacio.
+* Elección para los runs completos de la noche: `ayr_Latn` y `dyu_Latn` (mayor Δ del paper y mayor Δ del piloto, respectivamente).
+
