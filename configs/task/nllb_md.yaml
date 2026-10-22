@@ -5,10 +5,17 @@ data:
   source_lang: eng_Latn
   target_lang: rus_Cyrl
   dataset_config_name: "eng_Latn-rus_Cyrl"
+  # [replication] optional subsets (null = full split). Seeded random subset, see dl.py.
+  max_train_samples: null
+  max_val_samples: null
+  max_test_samples: null
+  subset_seed: 0
 
 model:
-  name: "/workspace/thesis/src/model/facebook-nllb-200-distilled-600M_epoch_0_rus_Cyrl_chrf"
-  # name: "facebook/nllb-200-distilled-600M"
+  # [replication] the original value was a local checkpoint of the author (epoch 0 of rus_Cyrl, i.e. the
+  # config was used to chain 1-epoch runs). We start from the public base model:
+  name: "facebook/nllb-200-distilled-600M"
+  # name: "/workspace/thesis/src/model/facebook-nllb-200-distilled-600M_epoch_0_rus_Cyrl_chrf"
   # name: /workspace/thesis/src/model/facebook-nllb-200-distilled-600M_epoch_2_wol_Latn
   # name: "facebook/nllb-200-3.3B"
   use_lora: false
@@ -35,6 +42,12 @@ training:
   use_wandb: true
   log_every_n_steps: 5
   update_ref_policy_every_n_steps: 16
+  # [replication] extra options; the defaults below reproduce the original behaviour
+  max_steps: null            # stop after N batches (null = full epochs)
+  save_model: true           # save a checkpoint at the end of each epoch (in the hydra run dir)
+  freeze_embeddings: false   # true: freeze shared embeddings/lm_head (saves GPU memory)
+  optimizer: adamw           # adamw | adamw8bit (bitsandbytes; saves GPU memory)
+  logp_chunk_groups: null    # e.g. 1: compute the GRPO loss/backward one prompt-group at a time (saves memory)
   
 eval:
   run: true

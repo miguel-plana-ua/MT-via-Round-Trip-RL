@@ -1,6 +1,9 @@
 import os
 import copy
+import json
+import time
 import hydra
+from hydra.core.hydra_config import HydraConfig
 import torch
 from omegaconf import DictConfig, OmegaConf
 import wandb
@@ -30,6 +33,7 @@ def _run_evaluation(
     total_training_steps: int = 0,
     wandb_run = None,
     wandb_table = None,
+    save_hyps_as: str = None,
 ):
     if eval_cfg is None or dataloader is None:
         return {}
@@ -94,6 +98,17 @@ def _run_evaluation(
                 if pbar.total is not None:
                     pbar.update(1)
 
+    if save_hyps_as is not None and predictions:
+        # One sentence per line, same order as the (unshuffled) dataloader: lets us run paired
+        # significance tests between "before" and "after" with sacrebleu (see scripts/report.py).
+        hyp_dir = os.path.join(HydraConfig.get().runtime.output_dir, "hyps")
+        os.makedirs(hyp_dir, exist_ok=True)
+        flat = lambda t: t.replace("\n", " ").replace("\r", " ")
+        with open(os.path.join(hyp_dir, f"{save_hyps_as}.hyp.txt"), "w", encoding="utf-8") as f:
+            f.write("\n".join(flat(t) for t in predictions) + "\n")
+        with open(os.path.join(hyp_dir, f"{split_name}.ref.txt"), "w", encoding="utf-8") as f:
+            f.write("\n".join(flat(t) for t in references) + "\n")
+
     results = {}
     if predictions and "chrf++" in requested_metrics:
         chrf_metric = CHRF(word_order=2, char_order=6)
@@ -105,6 +120,8 @@ def _run_evaluation(
         print(f"{split_name.capitalize()} evaluation results:")
         for key, value in results.items():
             print(f"  {key}: {value:.4f}")
+        with open(os.path.join(HydraConfig.get().runtime.output_dir, "metrics.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps({"split": split_name, "step": step_idx, "n": len(predictions), **results}) + "\n")
 
     if wandb_run is not None and (results or sample_records):
         # log the sample records 5 times across training steps
@@ -215,6 +232,10 @@ def train(config: DictConfig):
         target_lang=config.task.data.target_lang,
         sort_by_length=False,
         train_batch_size=int(getattr(config.task.training, "batch_size", 1)),
+        max_train_samples=getattr(config.task.data, "max_train_samples", None),
+        max_val_samples=getattr(config.task.data, "max_val_samples", None),
+        max_test_samples=getattr(config.task.data, "max_test_samples", None),
+        subset_seed=int(getattr(config.task.data, "subset_seed", 0)),
     )
     data.setup("fit")
     val_dataloader = data.val_dataloader() if run_eval else None
@@ -242,12 +263,28 @@ def train(config: DictConfig):
 
     # Optimizer setup
     if run_training:
+        # [replication, opt-in] Freeze the shared embedding / output projection (262M of 615M params
+        # in NLLB-600M). Default false = original behaviour (everything is trained).
+        if bool(getattr(config.task.training, "freeze_embeddings", False)):
+            for module in (model.get_input_embeddings(), model.get_output_embeddings()):
+                for p in module.parameters():
+                    p.requires_grad_(False)
+            print("freeze_embeddings=true: shared embeddings / lm_head are frozen.")
         trainable_params = [p for p in model.parameters() if p.requires_grad]
         if not trainable_params:
             raise ValueError("No trainable parameters found for the optimizer.")
-        optimizer = torch.optim.AdamW(
-            trainable_params, lr=float(getattr(config.task.training, "lr", 7e-6))
-        )
+        optimizer_name = str(getattr(config.task.training, "optimizer", "adamw")).lower()
+        if optimizer_name == "adamw":
+            optimizer = torch.optim.AdamW(
+                trainable_params, lr=float(getattr(config.task.training, "lr", 7e-6))
+            )
+        elif optimizer_name == "adamw8bit":  # [replication, opt-in] needs `pip install bitsandbytes`
+            import bitsandbytes as bnb
+            optimizer = bnb.optim.AdamW8bit(
+                trainable_params, lr=float(getattr(config.task.training, "lr", 7e-6))
+            )
+        else:
+            raise ValueError(f"Unknown training.optimizer: {optimizer_name}")
         optimizer.zero_grad()
         total_params = sum(p.numel() for p in model.parameters())
         trainable_params_count = sum(p.numel() for p in trainable_params)
@@ -272,8 +309,9 @@ def train(config: DictConfig):
             total_training_steps=total_training_steps,
             wandb_run=wandb_run,
             wandb_table=wandb_table,
+            save_hyps_as="test_before",
         )
-        
+
     if run_eval:
         _run_evaluation(
             model,
@@ -290,12 +328,28 @@ def train(config: DictConfig):
             wandb_table=wandb_table,
         )
 
+    # [replication] bookkeeping: global step across epochs, optional step cap, per-step jsonl log
+    step_idx = 0
+    global_step = 0
+    max_steps = getattr(config.task.training, "max_steps", None)
+    max_steps = int(max_steps) if max_steps is not None else None
+    chunk_groups = getattr(config.task.training, "logp_chunk_groups", None)
+    chunk_groups = int(chunk_groups) if chunk_groups is not None else None
+    train_log_path = os.path.join(HydraConfig.get().runtime.output_dir, "train_log.jsonl")
+    stop_training = False
+
     if run_training:
         for epoch in range(max_epochs):
+            if stop_training:
+                break
             train_loader = data.train_dataloader()
             step_idx = 0
 
             for batch in train_loader:
+                if max_steps is not None and global_step >= max_steps:
+                    stop_training = True
+                    break
+                step_t0 = time.time()
                 src_prompt, ground_truths, source_texts, sample_ids = batch
                 encoder_inputs = {k: v.to(policy_device, non_blocking=True) for k, v in src_prompt.items()}
                 batch_size = encoder_inputs["input_ids"].size(0)                
@@ -383,6 +437,10 @@ def train(config: DictConfig):
                         for idx in range(backward_batch_size)
                     ]
 
+                    loss_scale = 1.0 / float(grad_accum_steps)
+                    # chunk_groups=None (default) -> original behaviour: the loss is returned with its
+                    # graph and back-propagated here. With logp_chunk_groups set, the backward pass is
+                    # done inside, chunk by chunk (same gradients, lower peak memory).
                     loss_backward, logs_backward = grpo_compute_loss_and_logs(
                         model,
                         ref_model,
@@ -394,10 +452,12 @@ def train(config: DictConfig):
                         beta=beta,
                         clip_param=clip_param,
                         tgt_lang_id=src_lang_id,
+                        backward_scale=loss_scale if chunk_groups is not None else None,
+                        chunk_groups=chunk_groups,
                     )
 
-                    loss_scale = 1.0 / float(grad_accum_steps)
-                    (loss_backward * loss_scale).backward()
+                    if chunk_groups is None:
+                        (loss_backward * loss_scale).backward()
                     accum_steps_since_update += 1
                     if accum_steps_since_update >= grad_accum_steps:
                         optimizer.step()
@@ -405,11 +465,11 @@ def train(config: DictConfig):
                         accum_steps_since_update = 0
                         optimizer_step += 1
                         if optimizer_step % int(getattr(config.task.training, "update_ref_policy_every_n_steps", 16)) == 0:
-                            # Refresh reference model at epoch boundaries
-                            ref_model = copy.deepcopy(model).to(aux_device)
+                            # Refresh the reference model with the current policy. [replication] copied
+                            # in place (load_state_dict handles the cuda:1 -> cuda:0 transfer) instead of
+                            # deepcopy+to(), which briefly allocated a full extra model on the policy GPU.
+                            ref_model.load_state_dict(model.state_dict())
                             ref_model.eval()
-                            for p in ref_model.parameters():
-                                p.requires_grad_(False)
 
                 updates_per_batch += getattr(config.task.training, "updates_per_batch", 50)
                 if run_eval and eval_every_n_opt_steps > 0 and (optimizer_step % eval_every_n_opt_steps == 0):
@@ -422,7 +482,7 @@ def train(config: DictConfig):
                         device=policy_device,
                         max_new_tokens=max_new_tokens,
                         split_name="eval",
-                        step_idx=step_idx,
+                        step_idx=global_step + 1,  # this batch is counted right below
                         total_training_steps=total_training_steps,
                         wandb_run=wandb_run,
                         wandb_table=wandb_table,
@@ -469,12 +529,33 @@ def train(config: DictConfig):
                     #         )
                     #     wandb.log({"train/Translations": train_table}, step=step_idx)
                 step_idx += 1
+                global_step += 1
+                record = {
+                    "step": global_step, "epoch": epoch, "opt_step": optimizer_step,
+                    "forward_chrf": float(forward_chrf_mean),
+                    "backward_loss": float(logs_backward["loss"]), "backward_kl": float(logs_backward["kl"]),
+                    "backward_reward": float(logs_backward["reward"]),
+                    "backward_chrf": float(logs_backward["chrf"]), "backward_bleu": float(logs_backward["bleu"]),
+                    "sec": round(time.time() - step_t0, 3),
+                }
+                if torch.cuda.is_available():
+                    record["peak_mem_gb"] = [
+                        round(torch.cuda.max_memory_allocated(i) / 2**30, 2)
+                        for i in range(torch.cuda.device_count())
+                    ]
+                with open(train_log_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(record) + "\n")
             # Save the model every epoch
-            epoch_save_dir = os.path.join(os.getcwd(), "model", f"{model_name_for_run}_epoch_{epoch}_{target_lang_code}_chrf")
-            os.makedirs(epoch_save_dir, exist_ok=True)
-            model.save_pretrained(epoch_save_dir)
-            tokenizer.save_pretrained(epoch_save_dir)
-            print(f"Model saved to {epoch_save_dir}")
+            # [replication] saved inside the hydra run dir (original: ./model in the cwd); can be disabled.
+            if bool(getattr(config.task.training, "save_model", True)):
+                epoch_save_dir = os.path.join(
+                    HydraConfig.get().runtime.output_dir, "model",
+                    f"{model_name_for_run}_epoch_{epoch}_{target_lang_code}_chrf",
+                )
+                os.makedirs(epoch_save_dir, exist_ok=True)
+                model.save_pretrained(epoch_save_dir)
+                tokenizer.save_pretrained(epoch_save_dir)
+                print(f"Model saved to {epoch_save_dir}")
     if run_eval and not eval_only:
         _run_evaluation(
             model,
@@ -485,13 +566,14 @@ def train(config: DictConfig):
             device=policy_device,
             max_new_tokens=max_new_tokens,
             split_name="eval",
-            step_idx=step_idx,
+            step_idx=global_step,
             total_training_steps=total_training_steps,
             wandb_run=wandb_run,
             wandb_table=wandb_table,
         )
-        
-    if run_test:
+
+    # [replication] with eval.only the test set was already evaluated above; do not evaluate it twice.
+    if run_test and not eval_only:
         _run_evaluation(
             model,
             tokenizer,
@@ -501,10 +583,11 @@ def train(config: DictConfig):
             device=policy_device,
             max_new_tokens=max_new_tokens,
             split_name="test",
-            step_idx=step_idx,
+            step_idx=global_step,
             total_training_steps=total_training_steps,
             wandb_run=wandb_run,
             wandb_table=wandb_table,
+            save_hyps_as="test_after",
         )
 
     if wandb.run is not None:

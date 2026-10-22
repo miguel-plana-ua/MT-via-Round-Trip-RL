@@ -1,5 +1,5 @@
 import math
-from typing import Sequence
+from typing import Optional, Sequence
 
 import torch
 from sacrebleu.metrics import CHRF, BLEU
@@ -46,9 +46,10 @@ def grpo_generate_sequences(
 
 
 def _gather_log_probs_from_logits_logits(logits: torch.Tensor, target_ids: torch.Tensor) -> torch.Tensor:
-    log_probs = logits.log_softmax(dim=-1)
-    gathered = torch.gather(log_probs, dim=-1, index=target_ids.unsqueeze(-1)).squeeze(-1)
-    return gathered
+    # log p(target) = logit[target] - logsumexp(logits). Same value as log_softmax + gather, but it
+    # does not materialise a second (B, L, V) tensor (V = 256k for NLLB).
+    target_logits = torch.gather(logits, dim=-1, index=target_ids.unsqueeze(-1)).squeeze(-1)
+    return target_logits - torch.logsumexp(logits, dim=-1)
 
 
 def grpo_compute_decoder_per_token_logps(
@@ -105,7 +106,20 @@ def grpo_compute_loss_and_logs(
     beta: float,
     clip_param: float,
     tgt_lang_id: int,
+    backward_scale: Optional[float] = None,
+    chunk_groups: Optional[int] = None,
 ):
+    """GRPO loss for a batch of prompts, each with `num_candidates` sampled completions.
+
+    Default (backward_scale=None): returns (loss, logs) with the autograd graph attached, as in the
+    original code.
+
+    Memory-saving mode (backward_scale given): per-token log-probs are computed `chunk_groups`
+    prompts at a time and `loss * backward_scale` is back-propagated chunk by chunk inside this
+    function; the returned loss is detached. The maths is identical (the loss is a mean of
+    per-sequence terms and rewards/advantages are computed per group before chunking); it only
+    avoids holding the (n_seqs, L, 256k) logits of the whole batch in memory at once.
+    """
     if isinstance(ground_truths, str):
         ground_truths = [ground_truths]
     else:
@@ -116,6 +130,8 @@ def grpo_compute_loss_and_logs(
             "generated_sequences must be a 3D tensor of shape (batch_size, num_candidates, seq_len). "
             f"Received tensor with shape {tuple(generated_sequences.shape)}."
         )
+    if chunk_groups is not None and backward_scale is None:
+        raise ValueError("chunk_groups requires backward_scale (the backward pass happens per chunk).")
 
     device = next(model.parameters()).device
     generated_sequences = generated_sequences.to(device)
@@ -130,15 +146,6 @@ def grpo_compute_loss_and_logs(
     # Prepare decoder inputs/targets
     decoder_input_ids = flat_sequences[:, :-1]
     target_ids = flat_sequences[:, 1:]
-
-    # Compute per-token logps under current and reference policies
-    per_token_logps = grpo_compute_decoder_per_token_logps(
-        model, tokenizer, encoder_inputs, decoder_input_ids, target_ids
-    )
-    with torch.no_grad():
-        ref_per_token_logps = grpo_compute_decoder_per_token_logps(
-            ref_model, tokenizer, encoder_inputs, decoder_input_ids, target_ids
-        ).to(device)
 
     # Completion mask to ignore pads and tokens after first EOS
     is_pad = target_ids == tokenizer.pad_token_id
@@ -183,36 +190,69 @@ def grpo_compute_loss_and_logs(
         rewards.std(dim=1, keepdim=True) + 1e-4
     )
 
-    # Outcome-based advantages replicate the standardized reward over all tokens
-    per_token_logps = per_token_logps.reshape(batch_size, num_candidates, -1)
-    advantages = standardized_rewards.unsqueeze(-1).expand_as(per_token_logps)
+    # Chunks of whole groups (prompts); a single chunk reproduces the original behaviour.
+    step = batch_size if chunk_groups is None else max(int(chunk_groups), 1)
+    n_seqs = batch_size * num_candidates
+    loss_total = torch.zeros((), device=device)
+    kl_sum = torch.zeros((), device=device)
+    token_total = torch.zeros((), device=device)
+    loss_with_graph = None
 
-    # PPO-style ratio (on-policy baseline trick)
-    ratio = torch.exp(per_token_logps - per_token_logps.detach())
-    clipped_ratio = torch.clamp(ratio, 1 - clip_param, 1 + clip_param)
-    per_token_adv_loss = torch.min(ratio * advantages, clipped_ratio * advantages)
+    for g0 in range(0, batch_size, step):
+        g1 = min(g0 + step, batch_size)
+        r0, r1 = g0 * num_candidates, g1 * num_candidates
+        chunk_inputs = {k: v[g0:g1] for k, v in encoder_inputs.items()}
 
-    # KL penalty versus reference policy
-    ref_minus_pi = ref_per_token_logps.reshape(batch_size, num_candidates, -1) - per_token_logps
-    per_token_kl = torch.exp(ref_minus_pi) - ref_minus_pi - 1.0
+        # Compute per-token logps under current and reference policies
+        per_token_logps = grpo_compute_decoder_per_token_logps(
+            model, tokenizer, chunk_inputs, decoder_input_ids[r0:r1], target_ids[r0:r1]
+        )
+        with torch.no_grad():
+            ref_per_token_logps = grpo_compute_decoder_per_token_logps(
+                ref_model, tokenizer, chunk_inputs, decoder_input_ids[r0:r1], target_ids[r0:r1]
+            ).to(device)
 
-    per_token_obj = per_token_adv_loss - beta * per_token_kl
-    per_token_obj = per_token_obj * completion_mask
+        mask = completion_mask[g0:g1]
+        # Outcome-based advantages replicate the standardized reward over all tokens
+        per_token_logps = per_token_logps.reshape(g1 - g0, num_candidates, -1)
+        advantages = standardized_rewards[g0:g1].unsqueeze(-1).expand_as(per_token_logps)
 
-    # Mean over valid tokens per sequence, then batch mean
-    token_counts = completion_mask.sum(dim=-1).clamp_min(1)
-    # per_token
-    seq_losses = -per_token_obj.sum(dim=-1) / token_counts
-    loss = seq_losses.mean()
+        # PPO-style ratio (on-policy baseline trick)
+        ratio = torch.exp(per_token_logps - per_token_logps.detach())
+        clipped_ratio = torch.clamp(ratio, 1 - clip_param, 1 + clip_param)
+        per_token_adv_loss = torch.min(ratio * advantages, clipped_ratio * advantages)
 
-    with torch.no_grad():
-        kl_mean = (per_token_kl * completion_mask).sum() / token_counts.sum()
+        # KL penalty versus reference policy
+        ref_minus_pi = ref_per_token_logps.reshape(g1 - g0, num_candidates, -1) - per_token_logps
+        per_token_kl = torch.exp(ref_minus_pi) - ref_minus_pi - 1.0
+
+        per_token_obj = per_token_adv_loss - beta * per_token_kl
+        per_token_obj = per_token_obj * mask
+
+        # Mean over valid tokens per sequence, then batch mean
+        token_counts = mask.sum(dim=-1).clamp_min(1)
+        seq_losses = -per_token_obj.sum(dim=-1) / token_counts
+        chunk_loss = seq_losses.sum() / n_seqs  # adds up to seq_losses.mean() over all chunks
+
+        if backward_scale is not None:
+            (chunk_loss * backward_scale).backward()
+        else:
+            loss_with_graph = chunk_loss  # single chunk: keep the graph
+        loss_total = loss_total + chunk_loss.detach()
+        with torch.no_grad():
+            kl_sum = kl_sum + (per_token_kl * mask).sum()
+            token_total = token_total + token_counts.sum()
+        del per_token_logps, ref_per_token_logps, per_token_kl, per_token_obj, chunk_loss
+
+    kl_mean = kl_sum / token_total
 
     logs = {
-        "loss": loss.detach(),
+        "loss": loss_total.detach(),
         "kl": kl_mean.detach(),
         "reward": rewards.mean().detach(),
         "chrf": chrf_mean.detach(),
         "bleu": bleu_mean.detach(),
     }
-    return loss, logs
+    if backward_scale is None:
+        return loss_with_graph, logs
+    return loss_total.detach(), logs

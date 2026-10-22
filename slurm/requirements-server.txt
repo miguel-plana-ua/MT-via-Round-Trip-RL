@@ -1,0 +1,13 @@
+# Pinned dependencies for the replication environment (torch is installed separately, see setup_env.sh).
+# Versions = those the code was validated against on CPU; transformers>=4.56 is needed by main.py (`dtype=` kwarg).
+transformers==4.57.1
+datasets==3.6.0        # <4: breakend/nllb-multi-domain is a loading-script dataset (trust_remote_code)
+sacrebleu==2.5.1
+hydra-core==1.3.2
+omegaconf==2.3.0
+sentencepiece>=0.2.0
+protobuf>=4.25
+accelerate>=1.0,<2
+numpy>=1.26,<3
+tqdm
+wandb>=0.19,<0.23

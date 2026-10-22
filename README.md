@@ -46,3 +46,5 @@ If you find this work useful, please cite:
       url={https://arxiv.org/abs/2601.12535}, 
 }
 ```
+
+> **Replication notes (branch `feat/replication`)**: see [docs/replicacion/](docs/replicacion/README.md) for the staged replication plan, Slurm instructions and the list of changes against the original code.

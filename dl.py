@@ -1,9 +1,29 @@
+import inspect
+import os
 import torch
-from torch.utils.data import DataLoader, Sampler
-from torchdata.datapipes.map import MapDataPipe
-from pytorch_lightning import LightningDataModule
+from types import SimpleNamespace
+from torch.utils.data import DataLoader, Dataset, Sampler
 import warnings
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
+
+# --- Compatibility shims (replication) -------------------------------------------------------
+# The original code imports torchdata.datapipes (removed in torchdata>=0.10) and pytorch_lightning.
+# If they are installed they are used exactly as before; otherwise we fall back to equivalent
+# plain-PyTorch stand-ins (a MapDataPipe is just a map-style Dataset; the data module only uses
+# LightningDataModule.save_hyperparameters).
+try:
+    from torchdata.datapipes.map import MapDataPipe
+except ImportError:
+    MapDataPipe = Dataset
+
+try:
+    from pytorch_lightning import LightningDataModule
+except ImportError:
+    class LightningDataModule:
+        def save_hyperparameters(self, ignore=None):
+            caller_locals = inspect.currentframe().f_back.f_locals
+            skip = {"self", "__class__", ignore}
+            self.hparams = SimpleNamespace(**{k: v for k, v in caller_locals.items() if k not in skip})
 
 warnings.filterwarnings("ignore", ".*does not have many workers.*")
 
@@ -20,6 +40,10 @@ class TranslationDataModule(LightningDataModule):
         sort_by_length: bool = True,
         sort_direction: str = "asc",
         train_batch_size: int = 1,
+        max_train_samples=None,
+        max_val_samples=None,
+        max_test_samples=None,
+        subset_seed: int = 0,
     ):
         super().__init__()
         self.save_hyperparameters(ignore="tokenizer")
@@ -31,17 +55,28 @@ class TranslationDataModule(LightningDataModule):
         self._train_batch_size = max(int(train_batch_size), 1)
 
     def setup(self, stage=None):
-        prompts = load_dataset(
-            self.hparams.data_path, self.hparams.dataset_config_name, trust_remote_code=True
-        )
+        # [replication] The HF loading script downloads the data from tinyurl.com links on every run
+        # (even offline), which is fragile on a cluster. If `data_path` is a local directory holding a copy
+        # saved with scripts/prefetch.py (<data_path>/<config_name>/), that copy is used instead.
+        local_copy = os.path.join(str(self.hparams.data_path), self.hparams.dataset_config_name)
+        if os.path.isdir(local_copy):
+            prompts = load_from_disk(local_copy)
+        else:
+            prompts = load_dataset(
+                self.hparams.data_path, self.hparams.dataset_config_name, trust_remote_code=True
+            )
 
-        def _resolve_split(split_names):
+        def _resolve_split(split_names, limit=None):
             for split_name in split_names:
                 if split_name in prompts:
-                    return prompts[split_name]
+                    split = prompts[split_name]
+                    if limit is not None and int(limit) < len(split):
+                        # Seeded random subset (not the first N rows: the data mixes 3 domains, a prefix could be biased).
+                        split = split.shuffle(seed=self.hparams.subset_seed).select(range(int(limit)))
+                    return split
             return None
 
-        train_split = _resolve_split(("train", "training"))
+        train_split = _resolve_split(("train", "training"), self.hparams.max_train_samples)
         if train_split is None:
             raise ValueError("Training split not found in dataset.")
         self.train_data = TranslationDataPipe(
@@ -51,7 +86,7 @@ class TranslationDataModule(LightningDataModule):
             tgt_col="sentence_" + self.hparams.target_lang,
         )
 
-        val_split = _resolve_split(("valid", "validation", "val"))
+        val_split = _resolve_split(("valid", "validation", "val"), self.hparams.max_val_samples)
         if val_split is None:
             raise ValueError("Validation split not found in dataset.")
         self.val_data = TranslationDataPipe(
@@ -61,7 +96,7 @@ class TranslationDataModule(LightningDataModule):
             tgt_col="sentence_" + self.hparams.target_lang,
         )
 
-        test_split = _resolve_split(("test", "test_final"))
+        test_split = _resolve_split(("test", "test_final"), self.hparams.max_test_samples)
         if test_split is not None:
             self.test_data = TranslationDataPipe(
                 test_split,
