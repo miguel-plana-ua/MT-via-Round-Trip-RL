@@ -49,3 +49,22 @@ Registro de lo hecho, en orden, y de **qué se verificó y qué no**.
 ## Estado del repositorio
 Rama `feat/replication`, cambios **sin commitear** (se ven con `git status` / `git diff`). `data/` y `results/` están
 en `.gitignore`.
+
+## Primera ejecución en el servidor `abaco` (22-oct, job 2403, smoke)
+
+Entorno: 1 nodo, 8 × RTX 2080 Ti (11 GB), driver 575, partición `compute` sin límite, 20 cores / 125 GB compartidos.
+Slurm fija `CUDA_VISIBLE_DEVICES=0,1` pero **no aísla las GPUs** (sin cgroup de dispositivos): torch ve solo 2, `nvidia-smi`
+ve 8. Por eso `slurm/submit.sh` serializa los jobs (`--dependency=singleton`) y se lanza siempre vía Slurm.
+
+Resultado del smoke (`--mem lowmem`, 20 pasos, copia local del dataset `data/nllb-md`):
+
+| Medida | Valor |
+|---|---|
+| Duración total del job | 1 min 29 s, exit 0, sin errores en `log.txt` ni `.err` |
+| s/paso (mediana) | **3.3** → piloto 600 pasos ≈ 33 min; completo 6000 pasos ≈ 5.5 h (+ evaluaciones) |
+| Pico de memoria (tensores PyTorch) | **referencia (cuda:0) 3.27 GB; política (cuda:1) 8.9 GB de 11.26 GB** |
+| KL a la referencia | 0 hasta el paso 16 (refresco) y luego 3e-6 → 7.6e-6 → 2e-5: los pesos sí se actualizan |
+| chrF++ test 32 frases antes/después | 27.83 / 27.80 (ruido; no se espera mejora en 20 pasos) |
+
+Decisión: margen de memoria justo (~1.5 GB tras contexto CUDA y fragmentación) → perfil `lowmem1` (chunk 1) y
+`expandable_segments` en el job para los runs largos. Aún no se ha comprobado que el pico no crezca en runs largos.

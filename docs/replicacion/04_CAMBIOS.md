@@ -35,7 +35,7 @@ el cómputo es **opt-in** y se activa solo con los perfiles `--mem lowmem|tight`
 | `max_steps` | Para tras N batches | Solo para pilotos |
 
 Perfiles de `run_stage.py`: `paper` = nada de lo anterior; `lowmem` = `freeze_embeddings` + chunk de 2 prompts;
-`tight` = `freeze_embeddings` + chunk de 1 + `adamw8bit`.
+`lowmem1` = igual con chunk de 1 (≈0.8 GB menos de pico, algo más lento); `tight` = `freeze_embeddings` + chunk de 1 + `adamw8bit`.
 
 Estimación (mía, a verificar con el pico de memoria del smoke) de la GPU de la política: `paper` ≈ 14–16 GB,
 `lowmem` ≈ 8–9 GB, `tight` ≈ 5–6 GB; la GPU de la referencia necesita ≈ 2.5 GB + logits.

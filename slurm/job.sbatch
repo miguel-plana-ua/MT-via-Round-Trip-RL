@@ -8,6 +8,7 @@ source slurm/config.sh
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True   # less memory fragmentation on 11 GB cards
 echo "host: $(hostname)  job: ${SLURM_JOB_ID:-local}  date: $(date)"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
 nvidia-smi --query-gpu=index,name,memory.total,memory.used --format=csv

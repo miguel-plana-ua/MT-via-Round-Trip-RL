@@ -53,6 +53,7 @@ STAGES = {
 MEM = {
     "paper": [],
     "lowmem": ["task.training.freeze_embeddings=true", "task.training.logp_chunk_groups=2"],
+    "lowmem1": ["task.training.freeze_embeddings=true", "task.training.logp_chunk_groups=1"],
     "tight": ["task.training.freeze_embeddings=true", "task.training.logp_chunk_groups=1",
               "task.training.optimizer=adamw8bit"],
 }

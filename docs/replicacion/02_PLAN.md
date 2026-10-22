@@ -1,7 +1,7 @@
 # 2. Plan de réplica por etapas
 
 Principio: cada etapa responde **una** pregunta, cuesta más que la anterior y solo se pasa a la siguiente si la
-anterior sale bien. Todo se lanza con `scripts/run_stage.py` (en Slurm con `slurm/submit.sh`, ver 03_SERVIDOR.md);
+anterior sale bien. Todo se lanza con `scripts/run_stage.py` (en Slurm con `bash slurm/submit.sh`, ver 03_SERVIDOR.md);
 los resultados quedan en `results/<etapa>/<modelo>/<idioma>/seed<N>/` y se resumen con `scripts/report.py`.
 
 Hardware asumido: 2 GPUs 2080 (modelo 600M; `main.py` pone la política en `cuda:1` y la referencia en `cuda:0`,
@@ -27,7 +27,7 @@ python scripts/check_env.py --load-model      # mejor dentro de un job con GPU, 
 
 ### Etapa 1: smoke (40 frases, 20 pasos —cruza el refresco de la referencia del paso 16—, val/test de 32 frases)
 ```bash
-slurm/submit.sh smoke --lang ayr_Latn --mem lowmem
+bash slurm/submit.sh smoke --lang ayr_Latn --mem lowmem
 ```
 Qué mirar en `python scripts/report.py results/smoke/600M/ayr_Latn/seed27 --no-bootstrap`:
 `peak GPU memory`, `s/step`, que existan `train_log.jsonl` y `hyps/`. **No** se espera mejora (hallazgo H4).
@@ -35,7 +35,7 @@ Si da OOM con `lowmem` en 8 GB, repetir con `--mem tight` (requiere `pip install
 
 ### Etapa 2: Base en los 6 idiomas (solo evaluación)
 ```bash
-for l in ayr_Latn dyu_Latn wol_Latn rus_Cyrl fur_Latn bho_Deva; do slurm/submit.sh base --lang $l; done
+for l in ayr_Latn dyu_Latn wol_Latn rus_Cyrl fur_Latn bho_Deva; do bash slurm/submit.sh base --lang $l; done
 python scripts/report.py --table results
 ```
 Compara con la columna Base 600M (24.38, 18.03, 20.73, 48.80, 45.75, 43.07). Nota: aquí el test tiene 1500 frases
@@ -46,8 +46,8 @@ hasta que el Base sea razonable**: si no, cualquier delta posterior no es compar
 ### Etapa 3: piloto (600 pasos)
 Dos variantes, ambas con `ayr_Latn` (y luego `dyu_Latn`):
 ```bash
-slurm/submit.sh pilot --lang ayr_Latn --tag lr2e-6                    # hiperparámetros del paper
-slurm/submit.sh pilot --lang ayr_Latn --tag lr1e-5 --lr 1e-5          # DESVIACIÓN: lr ×5 para ver señal antes
+bash slurm/submit.sh pilot --lang ayr_Latn --tag lr2e-6                    # hiperparámetros del paper
+bash slurm/submit.sh pilot --lang ayr_Latn --tag lr1e-5 --lr 1e-5          # DESVIACIÓN: lr ×5 para ver señal antes
 ```
 Qué se espera y cómo interpretarlo (honestamente, sin conocer las curvas del autor):
 * Con 600 pasos y lr 2e-6 solo se recorre el 10 % del entrenamiento; la ganancia final del paper (+3.75 en ayr) se
@@ -62,7 +62,7 @@ Qué se espera y cómo interpretarlo (honestamente, sin conocer las curvas del a
 
 ### Etapa 4: ejecución completa de 1 idioma
 ```bash
-TIME=24:00:00 slurm/submit.sh full --lang ayr_Latn --mem lowmem --tag run1
+TIME=24:00:00 bash slurm/submit.sh full --lang ayr_Latn --mem lowmem --tag run1
 ```
 2 épocas × 3000 batches = 6000 pasos, validación en 300 frases cada 500 pasos, test completo antes y después.
 **Aviso de fidelidad:** `--mem lowmem/tight` congelan embeddings (y `tight` cambia el optimizador): son desviaciones. Si

@@ -8,8 +8,10 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 source slurm/config.sh
 mkdir -p slurm/logs
 
-FLAGS=(--job-name="mtrl-$1" --gres="$GRES" --cpus-per-task="$CPUS" --mem="$MEM" --time="$TIME"
-       --output="slurm/logs/%x-%j.out" --error="slurm/logs/%x-%j.err" --export=ALL)
+# All our jobs share the name "mtrl" + --dependency=singleton: they run ONE AT A TIME, so we never hold more than
+# $GRES GPUs even if several jobs are submitted at once (abaco has no per-user limit and 8 shared GPUs).
+FLAGS=(--job-name=mtrl --dependency=singleton --gres="$GRES" --cpus-per-task="$CPUS" --mem="$MEM" --time="$TIME"
+       --output="slurm/logs/mtrl-$1-%j.out" --error="slurm/logs/mtrl-$1-%j.err" --export=ALL)
 [ -n "$PARTITION" ] && FLAGS+=(--partition="$PARTITION")
 [ -n "$ACCOUNT" ] && FLAGS+=(--account="$ACCOUNT")
 sbatch "${FLAGS[@]}" slurm/job.sbatch "$@"

@@ -41,7 +41,7 @@ Apunta **modelo y memoria** de las GPUs. Elegir perfil: 8 GB → `--mem tight` (
 
 ## 4. Lanzar las etapas
 ```bash
-slurm/submit.sh smoke --lang ayr_Latn --mem lowmem       # etapa 1
+bash slurm/submit.sh smoke --lang ayr_Latn --mem lowmem       # etapa 1
 squeue -u $USER ; tail -f slurm/logs/mtrl-smoke-*.out
 python scripts/report.py results/smoke/600M/ayr_Latn/seed27 --no-bootstrap
 ```
