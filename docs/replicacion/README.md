@@ -20,4 +20,13 @@ Rama de trabajo: `feat/replication` (creada desde la rama original `src-tgt-src-
 7. Etapa 2 (`base`) valida datos/métrica sin entrenar: el Base debe parecerse al de la Tabla 1.
 8. Pilotos en `ayr_Latn`/`dyu_Latn` (mayor ganancia en el paper), 600M, con bootstrap pareado antes/después.
 9. Una ejecución usa las 2 GPUs reservadas (política en `cuda:1`, referencia en `cuda:0`).
-10. Nada de esto se ha podido ejecutar en las 2080: ver [DIARIO.md](DIARIO.md) para lo realmente probado.
+10. Todo lo anterior se ha ejecutado ya en las 2080 Ti de `abaco`: ver [DIARIO.md](DIARIO.md) para lo probado y los resultados.
+
+## Estado de la réplica (23-oct): resultados con NLLB-600M, test de 1500 frases, semilla 27, `--mem lowmem1`
+| Idioma | Base | Ours (nuestro) | Ours (paper) | Δ nuestro | Δ paper |
+|---|---|---|---|---|---|
+| `ayr_Latn` | 24.38 | 28.08 | 28.13 | +3.69 | +3.75 |
+| `dyu_Latn` | 18.03 | 22.62 | 22.50 | +4.58 | +4.47 |
+
+Pendiente: `wol`, `fur`, `bho`, `rus` completos, más semillas, control RT y 1.3B (ver `02_PLAN.md`). Detalle en `DIARIO.md`.
+

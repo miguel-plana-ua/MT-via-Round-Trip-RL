@@ -136,3 +136,32 @@ Mismas condiciones que el piloto de aimara: test completo (1500 frases) antes/de
   ruido del subconjunto de validación, pero es el idioma con menos señal; en `dyu_Latn` la validación sigue subiendo despacio.
 * Elección para los runs completos de la noche: `ayr_Latn` y `dyu_Latn` (mayor Δ del paper y mayor Δ del piloto, respectivamente).
 
+## Etapa 4 `full` (22→23-oct, noche): réplica de `ayr_Latn` y `dyu_Latn` con el paper
+
+Config del paper (lr 2e-6, 2 épocas = 6000 pasos, batch 2, K=4, β=0.04, ε=0.2, referencia cada 16 pasos, T=1.8, top-k 100,
+top-p 0.95), NLLB-600M, semilla 27, `--mem lowmem1` (única desviación: embeddings congelados), test completo de 1500 frases
+antes/después, validación en 300 frases cada 500 pasos. 3.4 s/paso, pico de memoria 7.59 GiB (política) / 2.79 GiB (referencia).
+
+| Idioma | Base nuestro (paper) | **Ours nuestro** | Ours paper | Δ nuestro | Δ paper | Bootstrap pareado antes/después |
+|---|---|---|---|---|---|---|
+| `ayr_Latn` | 24.38 (24.38) | **28.08** | 28.13 | **+3.69** | +3.75 | 24.4 ± 0.5 → 28.1 ± 0.4, p ≤ 0.001 |
+| `dyu_Latn` | 18.03 (18.03) | **22.62** | 22.50 | **+4.58** | +4.47 | 18.0 ± 0.4 → 22.6 ± 0.4, p ≤ 0.001 |
+
+Las diferencias frente a la tabla del paper son −0.05 (`ayr`) y +0.12 (`dyu`), muy por debajo de los intervalos de
+confianza del bootstrap (±0.4–0.5): **los resultados son compatibles con los publicados** (no demuestra igualdad exacta).
+
+Curvas de validación (300 frases, chrF++), cada 500 pasos:
+* `ayr`: 24.91, 25.77, 26.24, 26.57, 26.49, 26.81, **26.92 (paso 3000 = fin de la 1.ª época)**, 26.97, 27.14, 27.28, 27.36, 27.59, 27.60.
+* `dyu`: 18.08, 19.66, 20.44, 20.78, 21.22, 21.54, **21.72 (paso 3000)**, 21.85, 21.98, 22.13, 22.33, 22.40, 22.80.
+
+Observaciones:
+* Mejora casi monótona en ambos; el cambio de época (paso 3000), que era el riesgo sin probar en GPU, no rompió nada
+  (checkpoint guardado, entrenamiento continuo). No hay colapso ni *reward hacking* visible: la recompensa de vuelta pasa de
+  0.170 → 0.246 (`ayr`) y 0.168 → 0.229 (`dyu`), el KL se queda en ~1e-4 y la chrF de ida contra la referencia real
+  sube (18.7 → 22.7 y 15.3 → 18.6).
+* Los pilotos de 600 pasos daban ~40 % de la ganancia final (+1.51 y +1.87): la curva no era lineal pero tampoco saturaba pronto.
+  `dyu` sigue subiendo en el último tramo; `ayr` se aplana al final (27.59 → 27.60).
+* Cautelas: una sola semilla (igual que el paper); no hay control RT, así que no se separa el efecto del RL del de entrenar con
+  round-trip; la desviación de congelar embeddings no se ha aislado, pero no ha impedido reproducir el resultado. Por eso el
+  perfil `exact` aparcado en `02_PLAN.md` **no se activa**: su condición (quedar lejos del paper) no se ha dado.
+

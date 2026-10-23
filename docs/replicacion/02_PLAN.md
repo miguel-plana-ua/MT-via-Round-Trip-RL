@@ -81,6 +81,8 @@ test completo (1500 frases, greedy, batch 48) antes y después, y validación pe
 
 ## Siguientes pasos (ideas aparcadas, no implementadas)
 
+**Actualización 23-oct:** los runs completos de `ayr_Latn` (+3.69 frente a +3.75 del paper) y `dyu_Latn` (+4.58 frente a +4.47) con `lowmem1` reproducen el paper, así que la condición de abajo no se ha cumplido y A/B quedan aparcados.
+
 Decisión del 22-oct: los runs largos se hacen con `--mem lowmem1` (embeddings congelados), que es lo que está validado
 (piloto de aimara +1.51 con el lr del paper). Lo siguiente se retoma **solo si** el run completo de `ayr_Latn` queda
 claramente lejos del paper (600M: 24.38 → 28.13, +3.75) o si sobra tiempo.
